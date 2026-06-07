@@ -1,7 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, ZoomControl, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, ZoomControl, useMapEvents, Rectangle, ImageOverlay, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import './MapView.css';
+
+// Custom Map Controller to programmatically change map bounds
+function MapViewController({ fitBounds }) {
+  const map = useMap();
+  useEffect(() => {
+    if (fitBounds) {
+      map.fitBounds(fitBounds, {
+        padding: [40, 40],
+        maxZoom: 12,
+        animate: true,
+        duration: 1.2,
+      });
+    }
+  }, [fitBounds, map]);
+  return null;
+}
 
 // Custom Map Component to handle click-hold-drag-release drawing
 function DragSelectHandler({ active, setActive, onBBoxCreated, currentRectRef }) {
@@ -19,7 +35,7 @@ function DragSelectHandler({ active, setActive, onBBoxCreated, currentRectRef })
         currentRectRef.current.rect.remove();
       }
 
-      // Initialize the drawing rectangle
+      // Initialize the drawing rectangle (temporary visual layer)
       const rect = L.rectangle([e.latlng, e.latlng], {
         color: '#10b981',
         weight: 2,
@@ -60,7 +76,7 @@ function DragSelectHandler({ active, setActive, onBBoxCreated, currentRectRef })
       const south = bounds.getSouth();
       const north = bounds.getNorth();
 
-      // Ensure west is less than east after wrapping (unless crossing date line)
+      // Ensure west is less than east after wrapping
       if (west > east) {
         const temp = west;
         west = east;
@@ -74,11 +90,11 @@ function DragSelectHandler({ active, setActive, onBBoxCreated, currentRectRef })
       if (latDiff > 0.0001 && lngDiff > 0.0001) {
         onBBoxCreated([west, south, east, north]);
         setActive(false); // Turn off draw mode after successful draw
-      } else {
-        // Remove if too small (just a click)
-        rect.remove();
-        currentRectRef.current = null;
       }
+
+      // Remove the temporary drawing rectangle; React will render the official bounding box
+      rect.remove();
+      currentRectRef.current = null;
     },
   });
 
@@ -95,7 +111,14 @@ function DragSelectHandler({ active, setActive, onBBoxCreated, currentRectRef })
   return null;
 }
 
-export default function MapView({ onBBoxCreated, onBBoxDeleted }) {
+export default function MapView({
+  bbox,
+  onBBoxCreated,
+  onBBoxDeleted,
+  fitBounds,
+  overlayUrl,
+  overlayBounds,
+}) {
   const [drawActive, setDrawActive] = useState(false);
   const currentRectRef = useRef(null);
   const mapRef = useRef(null);
@@ -113,8 +136,8 @@ export default function MapView({ onBBoxCreated, onBBoxDeleted }) {
   return (
     <div className="map-container">
       <MapContainer
-        center={[37.7749, -122.4194]} // SF Center
-        zoom={10}
+        center={[-2.5, 118.0]} // Indonesia Center
+        zoom={5} // Zoom level 5 fits whole Indonesia beautifully
         zoomControl={false}
         ref={mapRef}
         style={{ width: '100%', height: '100%' }}
@@ -132,6 +155,31 @@ export default function MapView({ onBBoxCreated, onBBoxDeleted }) {
           currentRectRef={currentRectRef}
         />
 
+        {/* Declarative Bounding Box Rectangle */}
+        {bbox && (
+          <Rectangle
+            bounds={[[bbox[1], bbox[0]], [bbox[3], bbox[2]]]}
+            pathOptions={{
+              color: '#10b981',
+              weight: 2,
+              fillOpacity: overlayUrl ? 0.0 : 0.1, // transparent if we have overlay
+              dashArray: '10 5',
+            }}
+          />
+        )}
+
+        {/* Declarative NDVI Raster Overlay Layer */}
+        {overlayUrl && overlayBounds && (
+          <ImageOverlay
+            url={overlayUrl}
+            bounds={overlayBounds}
+            opacity={0.8}
+          />
+        )}
+
+        {/* Dynamic Zoom/Bounds controller */}
+        <MapViewController fitBounds={fitBounds} />
+
         <ZoomControl position="topright" />
       </MapContainer>
 
@@ -144,7 +192,7 @@ export default function MapView({ onBBoxCreated, onBBoxDeleted }) {
         >
           {drawActive ? '⏹️ Cancel Drawing' : '🟩 Select Area'}
         </button>
-        {currentRectRef.current && (
+        {bbox && (
           <button className="toolbar-btn clear-btn" onClick={handleClear}>
             🗑️ Clear Area
           </button>
@@ -153,3 +201,4 @@ export default function MapView({ onBBoxCreated, onBBoxDeleted }) {
     </div>
   );
 }
+

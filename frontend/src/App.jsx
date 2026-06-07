@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { saveAs } from 'file-saver';
 import MapView from './components/MapView';
 import ControlPanel from './components/ControlPanel';
+import StatsDashboard from './components/StatsDashboard';
 import LoadingOverlay from './components/LoadingOverlay';
 import { fetchNDVI } from './api/ndvi';
+import { parseNDVITiff } from './utils/ndviParser';
 
 export default function App() {
   // Helper to format Date objects as YYYY-MM-DD
@@ -33,32 +35,63 @@ export default function App() {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
 
+  // Stats and Overlay States
+  const [stats, setStats] = useState(null);
+  const [overlayUrl, setOverlayUrl] = useState(null);
+  const [overlayBounds, setOverlayBounds] = useState(null);
+  const [fitBounds, setFitBounds] = useState(null);
+
   // Callbacks for Map selection
   const handleBBoxCreated = (selectedBBox) => {
     setBbox(selectedBBox);
     setError(null);
     setSuccess(false);
+    setStats(null);
+    setOverlayUrl(null);
+    setOverlayBounds(null);
   };
 
   const handleBBoxDeleted = () => {
     setBbox(null);
     setSuccess(false);
+    setStats(null);
+    setOverlayUrl(null);
+    setOverlayBounds(null);
+    setFitBounds(null);
+  };
+
+  // Callback for Place Search Selection
+  const handlePlaceSelect = (newBbox, leafletBounds) => {
+    setBbox(newBbox);
+    setFitBounds(leafletBounds);
+    setError(null);
+    setSuccess(false);
+    setStats(null);
+    setOverlayUrl(null);
+    setOverlayBounds(null);
+
+    // Auto-fetch NDVI for the newly searched place immediately!
+    handleFetchNDVI(newBbox);
   };
 
   // Trigger Backend Proxy request to fetch GeoTIFF
-  const handleFetchNDVI = async () => {
-    if (!bbox) {
-      setError('Please draw a bounding box area on the map first.');
+  const handleFetchNDVI = async (targetBbox = bbox) => {
+    const activeBbox = targetBbox || bbox;
+    if (!activeBbox) {
+      setError('Please draw a bounding box area on the map first or search a place.');
       return;
     }
 
     setLoading(true);
     setError(null);
     setSuccess(false);
+    setStats(null);
+    setOverlayUrl(null);
+    setOverlayBounds(null);
 
     try {
       const response = await fetchNDVI({
-        bbox,
+        bbox: activeBbox,
         dateFrom,
         dateTo,
         resolution
@@ -84,6 +117,14 @@ export default function App() {
         window.URL.revokeObjectURL(url);
       }
 
+      // Parse the GeoTIFF binary in the browser to compute stats and render image overlay
+      const arrayBuffer = await blob.arrayBuffer();
+      const parsedData = await parseNDVITiff(arrayBuffer);
+
+      // Set visualization overlay and graphs data
+      setOverlayUrl(parsedData.visualOverlayUrl);
+      setOverlayBounds([[activeBbox[1], activeBbox[0]], [activeBbox[3], activeBbox[2]]]);
+      setStats(parsedData.stats);
       setSuccess(true);
       
       // Auto-clear success message after 5 seconds
@@ -103,8 +144,12 @@ export default function App() {
     <div className="app-container">
       {/* 1. Leaflet Interactive map covering whole viewport */}
       <MapView
+        bbox={bbox}
         onBBoxCreated={handleBBoxCreated}
         onBBoxDeleted={handleBBoxDeleted}
+        fitBounds={fitBounds}
+        overlayUrl={overlayUrl}
+        overlayBounds={overlayBounds}
       />
 
       {/* 2. Parameters Configuration Floating panel */}
@@ -122,10 +167,20 @@ export default function App() {
         success={success}
         setSuccess={setSuccess}
         onFetch={handleFetchNDVI}
+        onPlaceSelect={handlePlaceSelect}
       />
 
-      {/* 3. Full-screen loading overlay while fetching */}
+      {/* 3. Vegetation analysis dashboard displaying NDVI stats and frequency graph */}
+      {stats && (
+        <StatsDashboard
+          stats={stats}
+          onClose={() => setStats(null)}
+        />
+      )}
+
+      {/* 4. Full-screen loading overlay while fetching */}
       {loading && <LoadingOverlay />}
     </div>
   );
 }
+
