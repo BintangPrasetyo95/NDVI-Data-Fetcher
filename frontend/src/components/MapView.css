@@ -1,0 +1,89 @@
+.map-container {
+  width: 100vw;
+  height: 100vh;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+}
+
+.dark-tiles {
+  /* CartoDB Dark Matter tiles are natively dark, no filters needed */
+}
+
+.leaflet-control-zoom {
+  border: 1px solid var(--border-glass) !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+}
+
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
+  background-color: var(--bg-glass) !important;
+  color: var(--text-primary) !important;
+  backdrop-filter: blur(10px);
+  transition: all 0.2s ease;
+}
+
+.leaflet-control-zoom-in:hover,
+.leaflet-control-zoom-out:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: var(--accent-green) !important;
+}
+
+/* Custom Floating Draw Toolbar */
+.custom-draw-toolbar {
+  position: fixed;
+  top: 20px;
+  right: 60px; /* Offset to float nicely next to Leaflet Zoom Control */
+  z-index: 1000;
+  display: flex;
+  gap: 10px;
+}
+
+.toolbar-btn {
+  background: var(--bg-glass);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  padding: 10px 18px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+.toolbar-btn:active {
+  transform: translateY(0);
+}
+
+.toolbar-btn.active {
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+  color: white;
+  box-shadow: 0 0 15px var(--accent-green-glow);
+}
+
+.clear-btn {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+.clear-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: white;
+}
