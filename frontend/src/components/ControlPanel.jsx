@@ -16,6 +16,8 @@ export default function ControlPanel({
   setSuccess,
   onFetch,
   onPlaceSelect,
+  onToggleForecast,
+  showForecast,
 }) {
   const [activeTab, setActiveTab] = useState('search'); // 'search' or 'draw'
   const [searchQuery, setSearchQuery] = useState('');
@@ -242,15 +244,47 @@ export default function ControlPanel({
         </div>
       )}
 
-      {/* Action Trigger */}
-      <button
-        className="btn-fetch"
-        disabled={!bbox || loading}
-        onClick={() => onFetch()}
-      >
-        <span>📡</span>
-        {loading ? 'Processing Imagery...' : 'Fetch NDVI Data'}
-      </button>
+      {/* Action Trigger Buttons */}
+      <div style={{ display: 'flex', gap: '10px' }}>
+        <button
+          className="btn-fetch"
+          disabled={!bbox || loading}
+          onClick={() => onFetch()}
+          style={{ flex: 1 }}
+        >
+          <span>📡</span>
+          {loading ? 'Processing...' : 'Fetch NDVI'}
+        </button>
+
+        <button
+          className="btn-forecast-toggle"
+          disabled={!bbox || loading}
+          onClick={onToggleForecast}
+          style={{
+            padding: '10px 14px',
+            borderRadius: 'var(--radius-md)',
+            border: 'none',
+            background: showForecast 
+              ? 'rgba(139, 92, 246, 0.4)' 
+              : 'linear-gradient(135deg, var(--accent-purple), #7c3aed)',
+            color: '#fff',
+            cursor: 'pointer',
+            fontWeight: '600',
+            fontSize: '0.85rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '6px',
+            boxShadow: showForecast 
+              ? '0 0 12px var(--accent-purple-glow)' 
+              : '0 4px 12px var(--accent-purple-glow)',
+            transition: 'all 0.25s ease'
+          }}
+        >
+          <span>🔮</span>
+          {showForecast ? 'Close Forecast' : 'Forecast NDVI'}
+        </button>
+      </div>
 
       <div className="panel-footer">
         Powered by Sentinel Hub &bull; Sentinel-2 L2A

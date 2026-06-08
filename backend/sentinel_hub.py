@@ -29,7 +29,7 @@ function evaluatePixel(sample) {
   // 0: NO_DATA, 1: SATURATED_OR_DEFECTIVE, 2: DARK_AREA_PIXELS, 3: CLOUD_SHADOWS,
   // 4: VEGETATION, 5: NOT_VEGETATED, 6: WATER, 7: UNCLASSIFIED, 
   // 8: CLOUD_MEDIUM_PROBABILITY, 9: CLOUD_HIGH_PROBABILITY, 10: THIN_CIRRUS, 11: SNOW_OR_ICE
-  let invalidSCL = [0, 1, 3, 6, 8, 9, 10];
+  let invalidSCL = [0, 1, 3, 8, 9, 10];
   if (invalidSCL.includes(sample.SCL)) {
     return [NaN];
   }
@@ -120,6 +120,9 @@ async def fetch_ndvi_tiff(
     """
     Fetches NDVI GeoTIFF binary data from Sentinel Hub Process API.
     """
+    # Shrink bbox to fit within safe limits if it is too large
+    bbox = limit_bbox_size(bbox, max_size_m=50000.0)
+
     # 1. Get Access Token
     token = await token_manager.get_token()
 
@@ -203,3 +206,250 @@ async def fetch_ndvi_tiff(
                 status_code=500,
                 detail=f"Sentinel Hub connection error: {str(e)}"
             )
+
+def limit_bbox_size(bbox: List[float], max_size_m: float = 50000.0) -> List[float]:
+    """
+    Checks if the bounding box size in meters exceeds max_size_m.
+    If it does, scales it down from the center to fit within the limit.
+    """
+    west, south, east, north = bbox
+    mean_lat = (south + north) / 2.0
+    
+    # Degrees to meters conversion constants
+    meters_per_deg_lat = 111000.0
+    meters_per_deg_lon = 111320.0 * math.cos(math.radians(mean_lat))
+
+    width_deg = abs(east - west)
+    height_deg = abs(north - south)
+
+    width_m = width_deg * meters_per_deg_lon
+    height_m = height_deg * meters_per_deg_lat
+
+    if width_m <= max_size_m and height_m <= max_size_m:
+        return bbox
+
+    # Calculate scale factor
+    factor = min(max_size_m / width_m, max_size_m / height_m)
+    
+    # Calculate center
+    center_lon = (west + east) / 2.0
+    center_lat = (south + north) / 2.0
+    
+    # Scale from center
+    half_width_deg = (width_deg * factor) / 2.0
+    half_height_deg = (height_deg * factor) / 2.0
+    
+    new_bbox = [
+        center_lon - half_width_deg,
+        center_lat - half_height_deg,
+        center_lon + half_width_deg,
+        center_lat + half_height_deg
+    ]
+    
+    logger.info(
+        f"BBox size ({width_m:.1f}m x {height_m:.1f}m) exceeded limit of {max_size_m}m. "
+        f"Shrunk bbox from center to {width_m * factor:.1f}m x {height_m * factor:.1f}m."
+    )
+    return new_bbox
+
+async def fetch_historical_ndvi_series(
+    bbox: List[float],
+    years_back: int = 3
+) -> List[dict]:
+    """
+    Fetches statistical monthly average NDVI values over the past N years for a bounding box.
+    Uses the Sentinel Hub Statistical API.
+    """
+    # Shrink bbox to fit within safe limits if it is too large
+    bbox = limit_bbox_size(bbox, max_size_m=50000.0)
+
+    token = await token_manager.get_token()
+
+    # Define time-range from N years ago until today
+    import datetime
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=years_back * 365)
+
+    # Use the Statistical API to retrieve clean metrics without downloading giant TIFFs
+    url = "https://services.sentinel-hub.com/api/v1/statistics"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+
+    # Evalscript specifically tailored to calculate mean NDVI and ignore cloudy pixels
+    stat_evalscript = """//VERSION=3
+    function setup() {
+      return {
+        input: [{
+          bands: ["B04", "B08", "SCL", "dataMask"]
+        }],
+        output: [
+          {
+            id: "default",
+            bands: 1,
+            sampleType: "FLOAT32"
+          },
+          {
+            id: "dataMask",
+            bands: 1
+          }
+        ]
+      };
+    }
+    function evaluatePixel(sample) {
+      let invalidSCL = [0, 1, 3, 8, 9, 10];
+      if (invalidSCL.includes(sample.SCL) || sample.dataMask === 0) {
+        return {
+          default: [NaN],
+          dataMask: [0]
+        };
+      }
+      let denominator = sample.B08 + sample.B04;
+      if (denominator === 0) {
+        return {
+          default: [NaN],
+          dataMask: [0]
+        };
+      }
+      return {
+        default: [(sample.B08 - sample.B04) / denominator],
+        dataMask: [1]
+      };
+    }
+    """
+
+    payload = {
+        "input": {
+            "bounds": {
+                "bbox": bbox,
+                "properties": {
+                    "crs": "http://www.opengis.net/def/crs/EPSG/0/4326"
+                }
+            },
+            "data": [{
+                "type": "sentinel-2-l2a",
+                "dataFilter": {}
+            }]
+        },
+        "aggregation": {
+            "timeRange": {
+                "from": f"{start_date.isoformat()}T00:00:00Z",
+                "to": f"{end_date.isoformat()}T23:59:59Z"
+            },
+            "aggregationInterval": {
+                "of": "P30D" # Group statistical values in roughly monthly intervals (30 days)
+            },
+            "evalscript": stat_evalscript,
+            "resx": 20,
+            "resy": 20
+        }
+    }
+
+    logger.info(f"Fetching historical NDVI statistics from {start_date} to {end_date} for bbox {bbox}")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            res_data = response.json()
+            
+            # Parse responses
+            series = []
+            for item in res_data.get("data", []):
+                interval = item.get("interval", {})
+                date_str = interval.get("from", "").split("T")[0]
+                outputs = item.get("outputs", {}).get("default", {})
+                
+                # Check bands statistics
+                bands_stats = outputs.get("bands", {}).get("B0", {})
+                mean_ndvi = bands_stats.get("stats", {}).get("mean")
+                
+                if mean_ndvi is not None:
+                    # Handle string "NaN" in JSON response
+                    if isinstance(mean_ndvi, str):
+                        if mean_ndvi.upper() == "NAN":
+                            mean_ndvi = float("nan")
+                        else:
+                            try:
+                                mean_ndvi = float(mean_ndvi)
+                            except ValueError:
+                                mean_ndvi = float("nan")
+                    
+                    if not math.isnan(mean_ndvi):
+                        series.append({
+                            "date": date_str,
+                            "ndvi": float(mean_ndvi)
+                        })
+                    
+            # Sort series chronologically
+            series.sort(key=lambda x: x["date"])
+            
+            # Simple Linear Interpolation in pure Python (removes pandas dependency)
+            if series:
+                # Sort series chronologically
+                series.sort(key=lambda x: x["date"])
+                
+                # Extract dates and values
+                existing_dates = [x["date"] for x in series]
+                existing_values = [x["ndvi"] for x in series]
+                n = len(existing_values)
+                
+                # Perform basic linear interpolation for any None/NaN values (if they somehow exist)
+                # and ensure all dates have continuous valid NDVI values.
+                interpolated_values = []
+                for i in range(n):
+                    val = existing_values[i]
+                    if val is not None and not math.isnan(val):
+                        interpolated_values.append(val)
+                        continue
+                    
+                    # Find surrounding known points
+                    left_val, right_val = None, None
+                    left_dist, right_dist = 0, 0
+                    
+                    # Look left
+                    for j in range(i - 1, -1, -1):
+                        if existing_values[j] is not None and not math.isnan(existing_values[j]):
+                            left_val = existing_values[j]
+                            left_dist = i - j
+                            break
+                    
+                    # Look right
+                    for j in range(i + 1, n):
+                        if existing_values[j] is not None and not math.isnan(existing_values[j]):
+                            right_val = existing_values[j]
+                            right_dist = j - i
+                            break
+                    
+                    # Interpolated value logic
+                    if left_val is not None and right_val is not None:
+                        interpolated_val = left_val + (right_val - left_val) * (left_dist / (left_dist + right_dist))
+                    elif left_val is not None:
+                        interpolated_val = left_val
+                    elif right_val is not None:
+                        interpolated_val = right_val
+                    else:
+                        interpolated_val = 0.0  # fallback
+                    
+                    interpolated_values.append(interpolated_val)
+                
+                series = [{"date": existing_dates[i], "ndvi": interpolated_values[i]} for i in range(n)]
+                
+            logger.info(f"Retrieved {len(series)} clean historical NDVI entries.")
+            return series
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Statistical API failed: Status {e.response.status_code} - {e.response.text}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Sentinel Hub statistical error: {e.response.text}"
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error fetching statistical NDVI series: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to fetch historical NDVI series: {str(e)}"
+            )
+

@@ -145,3 +145,162 @@ async def get_ndvi(request: NDVIRequest):
             status_code=500,
             detail=f"An unexpected server error occurred: {str(e)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Historical NDVI Time-Series
+# ---------------------------------------------------------------------------
+
+class HistoricalNDVIRequest(BaseModel):
+    bbox: List[float] = Field(
+        ...,
+        description="Bounding box coords: [west, south, east, north] (EPSG:4326)"
+    )
+    years_back: int = Field(
+        3,
+        description="Number of years of historical data to fetch (range: 1 - 5)"
+    )
+
+    @field_validator("bbox")
+    @classmethod
+    def validate_bbox(cls, v: List[float]) -> List[float]:
+        if len(v) != 4:
+            raise ValueError("Bounding box must contain exactly 4 floats [west, south, east, north]")
+
+        west, south, east, north = v
+        if not (-180 <= west <= 180):
+            raise ValueError("West longitude must be between -180 and 180")
+        if not (-180 <= east <= 180):
+            raise ValueError("East longitude must be between -180 and 180")
+        if not (-90 <= south <= 90):
+            raise ValueError("South latitude must be between -90 and 90")
+        if not (-90 <= north <= 90):
+            raise ValueError("North latitude must be between -90 and 90")
+        if west >= east:
+            raise ValueError("West longitude must be less than East longitude")
+        if south >= north:
+            raise ValueError("South latitude must be less than North latitude")
+        return v
+
+    @field_validator("years_back")
+    @classmethod
+    def validate_years_back(cls, v: int) -> int:
+        if not (1 <= v <= 5):
+            raise ValueError("years_back must be between 1 and 5")
+        return v
+
+
+@app.post("/api/fetch-historical-ndvi")
+async def get_historical_ndvi(request: HistoricalNDVIRequest):
+    """
+    Fetches monthly-averaged historical NDVI time-series for the given bounding box.
+    """
+    logger.info(
+        f"Received historical NDVI request: bbox={request.bbox}, "
+        f"years_back={request.years_back}"
+    )
+
+    from sentinel_hub import fetch_historical_ndvi_series
+
+    import os
+    if not os.getenv("SH_CLIENT_ID") or not os.getenv("SH_CLIENT_SECRET"):
+        logger.error("Sentinel Hub Client ID/Secret not set in backend environment.")
+        raise HTTPException(
+            status_code=500,
+            detail="Backend configuration error: Sentinel Hub credentials are not configured."
+        )
+
+    try:
+        series = await fetch_historical_ndvi_series(
+            bbox=request.bbox,
+            years_back=request.years_back
+        )
+
+        dates = [entry["date"] for entry in series]
+        ndvi_values = [entry["ndvi"] for entry in series]
+
+        return {
+            "dates": dates,
+            "ndvi_values": ndvi_values,
+            "data_points": len(series)
+        }
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.exception("Unexpected error in get_historical_ndvi endpoint")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected server error occurred: {str(e)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# NDVI LSTM Forecast
+# ---------------------------------------------------------------------------
+
+class PredictNDVIRequest(BaseModel):
+    ndvi_history: List[float] = Field(
+        ...,
+        description="Historical NDVI values (monthly averages) used for training"
+    )
+    months_ahead: int = Field(
+        6,
+        description="Number of months to forecast (range: 1 - 24)"
+    )
+
+    @field_validator("ndvi_history")
+    @classmethod
+    def validate_ndvi_history(cls, v: List[float]) -> List[float]:
+        if len(v) < 6:
+            raise ValueError(
+                f"ndvi_history must contain at least 6 values, got {len(v)}"
+            )
+        return v
+
+    @field_validator("months_ahead")
+    @classmethod
+    def validate_months_ahead(cls, v: int) -> int:
+        if not (1 <= v <= 24):
+            raise ValueError("months_ahead must be between 1 and 24")
+        return v
+
+
+@app.post("/api/predict-ndvi")
+async def predict_ndvi(request: PredictNDVIRequest):
+    """
+    Trains an LSTM model on the provided NDVI history and forecasts future values.
+    """
+    logger.info(
+        f"Received predict NDVI request: "
+        f"history_length={len(request.ndvi_history)}, "
+        f"months_ahead={request.months_ahead}"
+    )
+
+    try:
+        from ml.forecaster import NDVIForecaster
+
+        forecaster = NDVIForecaster()
+        loss = forecaster.train(request.ndvi_history)
+        logger.info(f"LSTM training complete. Final loss: {loss:.6f}")
+
+        predictions = forecaster.predict_future(
+            raw_history=request.ndvi_history,
+            months_ahead=request.months_ahead
+        )
+
+        return {
+            "predictions": predictions,
+            "training_loss": round(loss, 6),
+            "months_ahead": request.months_ahead
+        }
+
+    except ValueError as e:
+        logger.warning(f"Validation error during prediction: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Unexpected error in predict_ndvi endpoint")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected server error occurred: {str(e)}"
+        )

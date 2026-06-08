@@ -3,6 +3,7 @@ import { saveAs } from 'file-saver';
 import MapView from './components/MapView';
 import ControlPanel from './components/ControlPanel';
 import StatsDashboard from './components/StatsDashboard';
+import ForecastDashboard from './components/ForecastDashboard';
 import LoadingOverlay from './components/LoadingOverlay';
 import { fetchNDVI } from './api/ndvi';
 import { parseNDVITiff } from './utils/ndviParser';
@@ -34,6 +35,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
+  const [showForecast, setShowForecast] = useState(false);
 
   // Stats and Overlay States
   const [stats, setStats] = useState(null);
@@ -58,6 +60,7 @@ export default function App() {
     setOverlayUrl(null);
     setOverlayBounds(null);
     setFitBounds(null);
+    setShowForecast(false);
   };
 
   // Callback for Place Search Selection
@@ -125,6 +128,7 @@ export default function App() {
       setOverlayUrl(parsedData.visualOverlayUrl);
       setOverlayBounds([[activeBbox[1], activeBbox[0]], [activeBbox[3], activeBbox[2]]]);
       setStats(parsedData.stats);
+      setShowForecast(false);
       setSuccess(true);
       
       // Auto-clear success message after 5 seconds
@@ -168,6 +172,13 @@ export default function App() {
         setSuccess={setSuccess}
         onFetch={handleFetchNDVI}
         onPlaceSelect={handlePlaceSelect}
+        onToggleForecast={() => {
+          setShowForecast(prev => {
+            if (!prev) setStats(null);
+            return !prev;
+          });
+        }}
+        showForecast={showForecast}
       />
 
       {/* 3. Vegetation analysis dashboard displaying NDVI stats and frequency graph */}
@@ -178,7 +189,15 @@ export default function App() {
         />
       )}
 
-      {/* 4. Full-screen loading overlay while fetching */}
+      {/* 4. Forecasting LSTM dashboard (collapsible bottom panel) */}
+      {showForecast && bbox && (
+        <ForecastDashboard
+          bbox={bbox}
+          onClose={() => setShowForecast(false)}
+        />
+      )}
+
+      {/* 5. Full-screen loading overlay while fetching */}
       {loading && <LoadingOverlay />}
     </div>
   );

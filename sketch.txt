@@ -1,0 +1,6 @@
+Loading percentage
+
+completed NDVI file, because corrupted
+
+machine learning to process data overtime and implement LSTM to predict that the place will be fine and fresh for the next months, years or so, based on data overtime years back
+
