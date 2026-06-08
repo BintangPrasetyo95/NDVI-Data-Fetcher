@@ -121,7 +121,7 @@ async def fetch_ndvi_tiff(
     Fetches NDVI GeoTIFF binary data from Sentinel Hub Process API.
     """
     # Shrink bbox to fit within safe limits if it is too large
-    bbox = limit_bbox_size(bbox, max_size_m=50000.0)
+    bbox = limit_bbox_size(bbox, max_size_m=100000.0)
 
     # 1. Get Access Token
     token = await token_manager.get_token()
@@ -207,7 +207,7 @@ async def fetch_ndvi_tiff(
                 detail=f"Sentinel Hub connection error: {str(e)}"
             )
 
-def limit_bbox_size(bbox: List[float], max_size_m: float = 50000.0) -> List[float]:
+def limit_bbox_size(bbox: List[float], max_size_m: float = 100000.0) -> List[float]:
     """
     Checks if the bounding box size in meters exceeds max_size_m.
     If it does, scales it down from the center to fit within the limit.
@@ -261,7 +261,7 @@ async def fetch_historical_ndvi_series(
     Uses the Sentinel Hub Statistical API.
     """
     # Shrink bbox to fit within safe limits if it is too large
-    bbox = limit_bbox_size(bbox, max_size_m=50000.0)
+    bbox = limit_bbox_size(bbox, max_size_m=100000.0)
 
     token = await token_manager.get_token()
 

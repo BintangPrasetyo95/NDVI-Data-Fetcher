@@ -38,11 +38,11 @@ export async function fetchHistoricalNDVI({ bbox, yearsBack }) {
 }
 
 /**
- * Run LSTM prediction on historical NDVI data.
- * @param {{ ndviHistory: number[], monthsAhead: number }} params
+ * Run LSTM prediction on historical NDVI and climate data.
+ * @param {{ ndviHistory: number[], tempHistory?: number[], precipHistory?: number[], soilHistory?: number[], monthsAhead: number }} params
  * @returns {Promise<Object>} JSON response with predicted NDVI values
  */
-export async function predictNDVI({ ndviHistory, monthsAhead }) {
+export async function predictNDVI({ ndviHistory, tempHistory, precipHistory, soilHistory, monthsAhead }) {
   const response = await fetch('/api/predict-ndvi', {
     method: 'POST',
     headers: {
@@ -50,6 +50,9 @@ export async function predictNDVI({ ndviHistory, monthsAhead }) {
     },
     body: JSON.stringify({
       ndvi_history: ndviHistory,
+      temp_history: tempHistory,
+      precip_history: precipHistory,
+      soil_history: soilHistory,
       months_ahead: monthsAhead,
     }),
   });

@@ -72,6 +72,9 @@ export default function ForecastDashboard({ bbox, onClose }) {
     try {
       const response = await predictNDVI({
         ndviHistory: historyData.ndvi_values,
+        tempHistory: historyData.temperature_values,
+        precipHistory: historyData.precipitation_values,
+        soilHistory: historyData.soil_moisture_values,
         monthsAhead: monthsAhead
       });
 
@@ -461,7 +464,7 @@ export default function ForecastDashboard({ bbox, onClose }) {
                 </span>
               </div>
               
-              <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid rgba(255, 255, 255, 0.05)', borderRadius: '8px' }}>
+              <div style={{ maxHeight: '180px', overflowY: 'auto', border: '1px solid rgba(255, 255, 255, 0.05)', borderRadius: '8px' }}>
                 <table className="forecast-table">
                   <thead>
                     <tr>
@@ -469,6 +472,7 @@ export default function ForecastDashboard({ bbox, onClose }) {
                       <th>Predicted Date</th>
                       <th>Forecasted NDVI</th>
                       <th>Vegetation Status</th>
+                      <th>Rice Planting Guidance</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -482,6 +486,20 @@ export default function ForecastDashboard({ bbox, onClose }) {
                             <span className="status-badge-dot" />
                             {pred.status}
                           </span>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <span style={{ 
+                              fontSize: '0.8rem', 
+                              fontWeight: '600',
+                              color: pred.rice_suitability.includes('Highly') ? '#10b981' : 
+                                     pred.rice_suitability.includes('Moderately') ? '#f59e0b' : 
+                                     pred.rice_suitability.includes('Growing') ? '#3b82f6' : '#94a3b8'
+                            }}>
+                              {pred.rice_suitability}
+                            </span>
+                            <span style={{ fontSize: '0.7rem', color: '#64748b' }}>{pred.rice_detail}</span>
+                          </div>
                         </td>
                       </tr>
                     ))}

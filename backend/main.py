@@ -1,5 +1,6 @@
 import logging
-from typing import List
+import asyncio
+from typing import List, Optional
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -68,6 +69,20 @@ class NDVIRequest(BaseModel):
             raise ValueError("West longitude must be less than East longitude")
         if south >= north:
             raise ValueError("South latitude must be less than North latitude")
+
+        # Size check (max 100 km)
+        mean_lat = (south + north) / 2.0
+        import math
+        meters_per_deg_lat = 111000.0
+        meters_per_deg_lon = 111320.0 * math.cos(math.radians(mean_lat))
+        width_m = abs(east - west) * meters_per_deg_lon
+        height_m = abs(north - south) * meters_per_deg_lat
+        
+        if width_m > 100000.0 or height_m > 100000.0:
+            raise ValueError(
+                f"Selected area is too large ({width_m/1000:.1f} km x {height_m/1000:.1f} km). "
+                f"Bounding box width and height must be under 100 km."
+            )
         return v
 
     @field_validator("date_from", "date_to")
@@ -180,6 +195,20 @@ class HistoricalNDVIRequest(BaseModel):
             raise ValueError("West longitude must be less than East longitude")
         if south >= north:
             raise ValueError("South latitude must be less than North latitude")
+
+        # Size check (max 100 km)
+        mean_lat = (south + north) / 2.0
+        import math
+        meters_per_deg_lat = 111000.0
+        meters_per_deg_lon = 111320.0 * math.cos(math.radians(mean_lat))
+        width_m = abs(east - west) * meters_per_deg_lon
+        height_m = abs(north - south) * meters_per_deg_lat
+        
+        if width_m > 100000.0 or height_m > 100000.0:
+            raise ValueError(
+                f"Selected area is too large ({width_m/1000:.1f} km x {height_m/1000:.1f} km). "
+                f"Bounding box width and height must be under 100 km."
+            )
         return v
 
     @field_validator("years_back")
@@ -193,7 +222,7 @@ class HistoricalNDVIRequest(BaseModel):
 @app.post("/api/fetch-historical-ndvi")
 async def get_historical_ndvi(request: HistoricalNDVIRequest):
     """
-    Fetches monthly-averaged historical NDVI time-series for the given bounding box.
+    Fetches monthly-averaged historical NDVI time-series for the given bounding box along with NOAA climate data.
     """
     logger.info(
         f"Received historical NDVI request: bbox={request.bbox}, "
@@ -201,6 +230,7 @@ async def get_historical_ndvi(request: HistoricalNDVIRequest):
     )
 
     from sentinel_hub import fetch_historical_ndvi_series
+    from climate_api import fetch_historical_climate
 
     import os
     if not os.getenv("SH_CLIENT_ID") or not os.getenv("SH_CLIENT_SECRET"):
@@ -211,17 +241,46 @@ async def get_historical_ndvi(request: HistoricalNDVIRequest):
         )
 
     try:
-        series = await fetch_historical_ndvi_series(
-            bbox=request.bbox,
-            years_back=request.years_back
-        )
+        # Run NDVI and Climate queries concurrently to optimize latency
+        series_task = fetch_historical_ndvi_series(bbox=request.bbox, years_back=request.years_back)
+        climate_task = fetch_historical_climate(bbox=request.bbox, years_back=request.years_back)
+        
+        series, climate = await asyncio.gather(series_task, climate_task)
 
         dates = [entry["date"] for entry in series]
         ndvi_values = [entry["ndvi"] for entry in series]
 
+        # Align climate dates with Sentinel-Hub P30D dates.
+        # Find closest match for each Sentinel-Hub date in Open-Meteo's monthly groups
+        temp_aligned = []
+        precip_aligned = []
+        soil_aligned = []
+        
+        climate_months = climate.get("months", [])
+        temps = climate.get("temperature", [])
+        precips = climate.get("precipitation", [])
+        soils = climate.get("soil_moisture", [])
+        
+        for date_str in dates:
+            # Match by YYYY-MM
+            ym = date_str[:7]
+            if ym in climate_months:
+                idx = climate_months.index(ym)
+                temp_aligned.append(temps[idx])
+                precip_aligned.append(precips[idx])
+                soil_aligned.append(soils[idx])
+            else:
+                # Fallbacks if date is not in list
+                temp_aligned.append(20.0 if not temp_aligned else temp_aligned[-1])
+                precip_aligned.append(50.0 if not precip_aligned else precip_aligned[-1])
+                soil_aligned.append(0.25 if not soil_aligned else soil_aligned[-1])
+
         return {
             "dates": dates,
             "ndvi_values": ndvi_values,
+            "temperature_values": temp_aligned,
+            "precipitation_values": precip_aligned,
+            "soil_moisture_values": soil_aligned,
             "data_points": len(series)
         }
 
@@ -243,6 +302,18 @@ class PredictNDVIRequest(BaseModel):
     ndvi_history: List[float] = Field(
         ...,
         description="Historical NDVI values (monthly averages) used for training"
+    )
+    temp_history: Optional[List[float]] = Field(
+        None,
+        description="Historical temperature values matching the NDVI dates"
+    )
+    precip_history: Optional[List[float]] = Field(
+        None,
+        description="Historical precipitation values matching the NDVI dates"
+    )
+    soil_history: Optional[List[float]] = Field(
+        None,
+        description="Historical soil moisture values matching the NDVI dates"
     )
     months_ahead: int = Field(
         6,
@@ -269,7 +340,7 @@ class PredictNDVIRequest(BaseModel):
 @app.post("/api/predict-ndvi")
 async def predict_ndvi(request: PredictNDVIRequest):
     """
-    Trains an LSTM model on the provided NDVI history and forecasts future values.
+    Trains an LSTM model on the provided NDVI and climate history and forecasts future values.
     """
     logger.info(
         f"Received predict NDVI request: "
@@ -280,12 +351,26 @@ async def predict_ndvi(request: PredictNDVIRequest):
     try:
         from ml.forecaster import NDVIForecaster
 
-        forecaster = NDVIForecaster()
-        loss = forecaster.train(request.ndvi_history)
+        # Check if climate parameters are provided
+        has_climate = (
+            request.temp_history is not None and 
+            request.precip_history is not None and 
+            request.soil_history is not None and
+            len(request.temp_history) == len(request.ndvi_history)
+        )
+
+        forecaster = NDVIForecaster(input_size=4 if has_climate else 1)
+        
+        # Build features list
+        features = [request.ndvi_history]
+        if has_climate:
+            features.extend([request.temp_history, request.precip_history, request.soil_history])
+        
+        loss = forecaster.train_multivariate(features)
         logger.info(f"LSTM training complete. Final loss: {loss:.6f}")
 
-        predictions = forecaster.predict_future(
-            raw_history=request.ndvi_history,
+        predictions = forecaster.predict_future_multivariate(
+            features=features,
             months_ahead=request.months_ahead
         )
 
