@@ -326,10 +326,20 @@ class NDVIForecaster:
             else:
                 status = "Barren / Stressed / Urban"
                 
+            # Univariate fallback: check only NDVI
+            if val < 0.22:
+                suitability = "Possible Planting Window"
+                suitability_detail = "NDVI represents open ground, but local water levels should be checked"
+            else:
+                suitability = "Growing Stage"
+                suitability_detail = "High NDVI shows active crop cover"
+
             formatted_predictions.append({
                 "index": i + 1,
                 "ndvi": round(val, 3),
-                "status": status
+                "status": status,
+                "rice_suitability": suitability,
+                "rice_detail": suitability_detail
             })
             
         return formatted_predictions

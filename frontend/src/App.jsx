@@ -95,6 +95,7 @@ export default function App() {
   const [overlayUrl, setOverlayUrl] = useState(null);
   const [overlayBounds, setOverlayBounds] = useState(null);
   const [fitBounds, setFitBounds] = useState(null);
+  const [parsedTiffData, setParsedTiffData] = useState(null);
 
   // Callbacks for Map selection
   const handleBBoxCreated = (selectedBBox) => {
@@ -104,6 +105,7 @@ export default function App() {
     setStats(null);
     setOverlayUrl(null);
     setOverlayBounds(null);
+    setParsedTiffData(null);
   };
 
   const handleBBoxDeleted = () => {
@@ -114,6 +116,7 @@ export default function App() {
     setOverlayBounds(null);
     setFitBounds(null);
     setShowForecast(false);
+    setParsedTiffData(null);
   };
 
   // Callback for Place Search Selection
@@ -193,6 +196,7 @@ export default function App() {
       setOverlayUrl(parsedData.visualOverlayUrl);
       setOverlayBounds([[activeBbox[1], activeBbox[0]], [activeBbox[3], activeBbox[2]]]);
       setStats(parsedData.stats);
+      setParsedTiffData(parsedData);
       setShowForecast(false);
       setSuccess(true);
       
@@ -226,6 +230,33 @@ export default function App() {
         overlayBounds={overlayBounds}
       />
 
+      {/* Sidebar - Parameters Configuration panel */}
+      <div className="sidebar-layout">
+        <ControlPanel
+          bbox={bbox}
+          dateFrom={dateFrom}
+          setDateFrom={setDateFrom}
+          dateTo={dateTo}
+          setDateTo={setDateTo}
+          resolution={resolution}
+          setResolution={setResolution}
+          loading={loading}
+          error={error}
+          setError={setError}
+          success={success}
+          setSuccess={setSuccess}
+          onFetch={handleFetchNDVI}
+          onPlaceSelect={handlePlaceSelect}
+          onToggleForecast={() => {
+            setShowForecast(prev => {
+              if (!prev) setStats(null);
+              return !prev;
+            });
+          }}
+          showForecast={showForecast}
+        />
+      </div>
+
       {/* Resize handle bar */}
       <div 
         className={`resize-handle-bar ${isResizing ? 'active' : ''}`}
@@ -241,61 +272,33 @@ export default function App() {
       {/* Bottom Half Container */}
       <div className="bottom-half-layout" style={{ height: `${bottomHeight}px` }}>
         {!isMinimized && (
-          <>
-            {/* Parameters Configuration panel */}
-            <div className="bottom-column control-column">
-              <ControlPanel
-                bbox={bbox}
-                dateFrom={dateFrom}
-                setDateFrom={setDateFrom}
-                dateTo={dateTo}
-                setDateTo={setDateTo}
-                resolution={resolution}
-                setResolution={setResolution}
-                loading={loading}
-                error={error}
-                setError={setError}
-                success={success}
-                setSuccess={setSuccess}
-                onFetch={handleFetchNDVI}
-                onPlaceSelect={handlePlaceSelect}
-                onToggleForecast={() => {
-                  setShowForecast(prev => {
-                    if (!prev) setStats(null);
-                    return !prev;
-                  });
-                }}
-                showForecast={showForecast}
+          <div className="bottom-column dashboard-column">
+            {!stats && !showForecast && (
+              <div className="empty-state">
+                <span className="empty-icon">🛰️</span>
+                <h3>No Analysis Loaded</h3>
+                <p>Configure parameters on the left and fetch NDVI, or toggle the LSTM forecasting dashboard to compute vegetation trends.</p>
+              </div>
+            )}
+
+            {/* Vegetation analysis dashboard displaying NDVI stats */}
+            {stats && (
+              <StatsDashboard
+                stats={stats}
+                onClose={() => setStats(null)}
               />
-            </div>
+            )}
 
-            {/* Dynamic Display panel for active analysis or forecast */}
-            <div className="bottom-column dashboard-column">
-              {!stats && !showForecast && (
-                <div className="empty-state">
-                  <span className="empty-icon">🛰️</span>
-                  <h3>No Analysis Loaded</h3>
-                  <p>Configure parameters on the left and fetch NDVI, or toggle the LSTM forecasting dashboard to compute vegetation trends.</p>
-                </div>
-              )}
-
-              {/* Vegetation analysis dashboard displaying NDVI stats */}
-              {stats && (
-                <StatsDashboard
-                  stats={stats}
-                  onClose={() => setStats(null)}
-                />
-              )}
-
-              {/* Forecasting LSTM dashboard */}
-              {showForecast && bbox && (
-                <ForecastDashboard
-                  bbox={bbox}
-                  onClose={() => setShowForecast(false)}
-                />
-              )}
-            </div>
-          </>
+            {/* Forecasting LSTM dashboard */}
+            {showForecast && bbox && (
+              <ForecastDashboard
+                bbox={bbox}
+                onClose={() => setShowForecast(false)}
+                parsedTiffData={parsedTiffData}
+                setOverlayUrl={setOverlayUrl}
+              />
+            )}
+          </div>
         )}
       </div>
 

@@ -102,7 +102,7 @@ body {
 
 .bottom-half-layout {
   display: flex;
-  width: 100%;
+  width: calc(100% - 380px);
   z-index: 5;
   background-color: var(--bg-glass);
   backdrop-filter: blur(20px);
@@ -110,18 +110,13 @@ body {
   border-top: 1px solid var(--border-glass);
   position: absolute;
   bottom: 0;
-  left: 0;
+  left: 380px;
 }
 
 .bottom-column {
   height: 100%;
   overflow-y: auto;
-  border-right: 1px solid var(--border-glass);
-}
-
-.control-column {
-  width: 380px;
-  flex-shrink: 0;
+  width: 100%;
 }
 
 .dashboard-column {
@@ -129,6 +124,7 @@ body {
   background-color: var(--bg-primary);
   position: relative;
   min-width: 0;
+  height: 100%;
 }
 
 /* Empty State Styling */
@@ -187,8 +183,8 @@ body {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   cursor: row-resize;
   position: absolute;
-  left: 0;
-  width: 100%;
+  left: 380px;
+  width: calc(100% - 380px);
   z-index: 100;
   display: flex;
   align-items: center;
@@ -227,5 +223,20 @@ body {
 .btn-minimize-toggle:hover {
   background: var(--accent-purple);
   color: white;
+}
+
+.sidebar-layout {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 380px;
+  height: 100vh;
+  z-index: 10;
+  background-color: var(--bg-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-right: 1px solid var(--border-glass);
+  overflow-y: auto;
+  box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
 }
 

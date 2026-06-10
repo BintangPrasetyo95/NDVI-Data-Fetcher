@@ -175,6 +175,7 @@ export async function parseNDVITiff(arrayBuffer) {
     visualOverlayUrl,
     width,
     height,
+    ndviData, // Float32Array of raw values
     stats: {
       min: totalValid > 0 ? min : 0,
       max: totalValid > 0 ? max : 0,
@@ -198,4 +199,25 @@ export async function parseNDVITiff(arrayBuffer) {
       }
     }
   };
+}
+
+export function renderNDVIArrayToDataURL(ndviData, width, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(width, height);
+  const data = imgData.data;
+
+  for (let i = 0; i < ndviData.length; i++) {
+    const val = ndviData[i];
+    const idx = i * 4;
+    const [r, g, b, a] = getColorForNDVI(val);
+    data[idx] = r;
+    data[idx + 1] = g;
+    data[idx + 2] = b;
+    data[idx + 3] = a;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return canvas.toDataURL('image/png');
 }

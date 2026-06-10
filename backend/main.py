@@ -389,3 +389,207 @@ async def predict_ndvi(request: PredictNDVIRequest):
             status_code=500,
             detail=f"An unexpected server error occurred: {str(e)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Available Dates Querying
+# ---------------------------------------------------------------------------
+
+class AvailableDatesRequest(BaseModel):
+    bbox: List[float] = Field(
+        ...,
+        description="Bounding box coords: [west, south, east, north] (EPSG:4326)"
+    )
+    date_from: str = Field(..., description="Start date in YYYY-MM-DD format")
+    date_to: str = Field(..., description="End date in YYYY-MM-DD format")
+    max_cloud_cover: float = Field(
+        20.0,
+        description="Maximum cloud cover percentage allowed (range: 0 - 100)"
+    )
+
+    @field_validator("bbox")
+    @classmethod
+    def validate_bbox(cls, v: List[float]) -> List[float]:
+        if len(v) != 4:
+            raise ValueError("Bounding box must contain exactly 4 floats [west, south, east, north]")
+        
+        west, south, east, north = v
+        if not (-180 <= west <= 180) or not (-180 <= east <= 180):
+            raise ValueError("Longitudes must be between -180 and 180")
+        if not (-90 <= south <= 90) or not (-90 <= north <= 90):
+            raise ValueError("Latitudes must be between -90 and 90")
+        if west >= east:
+            raise ValueError("West longitude must be less than East longitude")
+        if south >= north:
+            raise ValueError("South latitude must be less than North latitude")
+        return v
+
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def validate_dates(cls, v: str) -> str:
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("Date must be in YYYY-MM-DD format")
+        return v
+
+
+@app.post("/api/available-dates")
+async def get_available_dates(request: AvailableDatesRequest):
+    """
+    Retrieves available acquisition dates from Sentinel Hub Catalog API for a given region, range, and cloud cover.
+    """
+    logger.info(
+        f"Received available dates request: bbox={request.bbox}, "
+        f"date_from={request.date_from}, date_to={request.date_to}, "
+        f"max_cloud_cover={request.max_cloud_cover}%"
+    )
+
+    from sentinel_hub import fetch_available_dates
+
+    # Check for presence of credentials
+    import os
+    if not os.getenv("SH_CLIENT_ID") or not os.getenv("SH_CLIENT_SECRET"):
+        logger.error("Sentinel Hub Client ID/Secret not set in backend environment.")
+        raise HTTPException(
+            status_code=500,
+            detail="Backend configuration error: Sentinel Hub credentials are not configured."
+        )
+
+    try:
+        dates = await fetch_available_dates(
+            bbox=request.bbox,
+            date_from=request.date_from,
+            date_to=request.date_to,
+            max_cloud_cover=request.max_cloud_cover
+        )
+        return {"dates": dates}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.exception("Unexpected error in get_available_dates endpoint")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected server error occurred: {str(e)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# NDVI Time-Series ZIP Exporter
+# ---------------------------------------------------------------------------
+
+import io
+import zipfile
+
+class NDVITimeSeriesRequest(BaseModel):
+    bbox: List[float] = Field(
+        ...,
+        description="Bounding box coords: [west, south, east, north] (EPSG:4326)"
+    )
+    dates: List[str] = Field(
+        ...,
+        description="List of dates (YYYY-MM-DD) to fetch individual GeoTIFFs for"
+    )
+    resolution: float = Field(
+        10.0,
+        description="Spatial resolution in meters/pixel (range: 1 - 500)"
+    )
+
+    @field_validator("bbox")
+    @classmethod
+    def validate_bbox(cls, v: List[float]) -> List[float]:
+        if len(v) != 4:
+            raise ValueError("Bounding box must contain exactly 4 floats [west, south, east, north]")
+        west, south, east, north = v
+        if not (-180 <= west <= 180) or not (-180 <= east <= 180):
+            raise ValueError("Longitudes must be between -180 and 180")
+        if not (-90 <= south <= 90) or not (-90 <= north <= 90):
+            raise ValueError("Latitudes must be between -90 and 90")
+        if west >= east:
+            raise ValueError("West longitude must be less than East longitude")
+        if south >= north:
+            raise ValueError("South latitude must be less than North latitude")
+        return v
+
+    @field_validator("dates")
+    @classmethod
+    def validate_dates(cls, v: List[str]) -> List[str]:
+        if not v:
+            raise ValueError("dates list cannot be empty")
+        if len(v) > 20:
+            raise ValueError("Maximum of 20 dates can be exported at once to avoid rate limits.")
+        for date_str in v:
+            try:
+                datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                raise ValueError(f"Date '{date_str}' must be in YYYY-MM-DD format")
+        return v
+
+
+@app.post("/api/export-ndvi-timeseries")
+async def export_ndvi_timeseries(request: NDVITimeSeriesRequest):
+    """
+    Fetches NDVI GeoTIFFs for multiple individual dates and bundles them into a ZIP archive.
+    """
+    logger.info(
+        f"Received NDVI time-series export request: bbox={request.bbox}, "
+        f"num_dates={len(request.dates)}, resolution={request.resolution}m"
+    )
+
+    from sentinel_hub import fetch_ndvi_tiff
+
+    # Check for credentials
+    import os
+    if not os.getenv("SH_CLIENT_ID") or not os.getenv("SH_CLIENT_SECRET"):
+        logger.error("Sentinel Hub credentials not set in environment.")
+        raise HTTPException(
+            status_code=500,
+            detail="Sentinel Hub credentials are not configured on the backend."
+        )
+
+    zip_buffer = io.BytesIO()
+
+    try:
+        # Fetch TIFFs concurrently to minimize latency (Sentinel Hub Process API supports concurrent requests well)
+        tasks = []
+        for date in request.dates:
+            tasks.append(
+                fetch_ndvi_tiff(
+                    bbox=request.bbox,
+                    date_from=date,
+                    date_to=date,
+                    resolution=request.resolution
+                )
+            )
+
+        # Gather results
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+            for date, result in zip(request.dates, results):
+                if isinstance(result, Exception):
+                    logger.error(f"Failed to fetch NDVI for date {date}: {str(result)}")
+                    # Write an error text file inside the zip for this date to notify user
+                    error_bytes = f"Error fetching NDVI for {date}: {str(result)}".encode("utf-8")
+                    zip_file.writestr(f"error_{date}.txt", error_bytes)
+                else:
+                    zip_file.writestr(f"ndvi_{date}.tiff", result)
+
+        zip_buffer.seek(0)
+        filename = f"ndvi_timeseries_{request.dates[0]}_to_{request.dates[-1]}.zip"
+
+        return Response(
+            content=zip_buffer.getvalue(),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Access-Control-Expose-Headers": "Content-Disposition"
+            }
+        )
+
+    except Exception as e:
+        logger.exception("Unexpected error in export_ndvi_timeseries endpoint")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected server error occurred: {str(e)}"
+        )

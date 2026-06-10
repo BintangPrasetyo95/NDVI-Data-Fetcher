@@ -453,3 +453,63 @@ async def fetch_historical_ndvi_series(
                 detail=f"Failed to fetch historical NDVI series: {str(e)}"
             )
 
+async def fetch_available_dates(
+    bbox: List[float],
+    date_from: str,
+    date_to: str,
+    max_cloud_cover: float = 20.0
+) -> List[str]:
+    """
+    Queries Sentinel Hub Catalog API for available acquisition dates with low cloud cover.
+    """
+    bbox = limit_bbox_size(bbox, max_size_m=100000.0)
+    token = await token_manager.get_token()
+
+    url = "https://services.sentinel-hub.com/api/v1/catalog/1.0.0/search"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "bbox": bbox,
+        "datetime": f"{date_from}T00:00:00Z/{date_to}T23:59:59Z",
+        "collections": ["sentinel-2-l2a"],
+        "limit": 100,
+        "query": {
+            "eo:cloud_cover": {
+                "lt": max_cloud_cover
+            }
+        }
+    }
+
+    logger.info(f"Querying catalog for available dates between {date_from} and {date_to} for bbox {bbox}")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            res_data = response.json()
+
+            dates = set()
+            for feature in res_data.get("features", []):
+                dt_str = feature.get("properties", {}).get("datetime")
+                if dt_str:
+                    dates.add(dt_str.split("T")[0])
+
+            sorted_dates = sorted(list(dates))
+            logger.info(f"Found {len(sorted_dates)} available dates.")
+            return sorted_dates
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Catalog API request failed: Status {e.response.status_code} - {e.response.text}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Sentinel Hub Catalog API error: {e.response.text}"
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error during Catalog API request: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Catalog fetch connection error: {str(e)}"
+            )
+

@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { fetchHistoricalNDVI, predictNDVI } from '../api/forecast';
+import { renderNDVIArrayToDataURL } from '../utils/ndviParser';
 import './ForecastDashboard.css';
 
-export default function ForecastDashboard({ bbox, onClose }) {
+export default function ForecastDashboard({ bbox, onClose, parsedTiffData, setOverlayUrl }) {
   const [step, setStep] = useState(1); // 1: Fetch, 2: Train & Predict, 3: Results
   const [yearsBack, setYearsBack] = useState(3);
   const [monthsAhead, setMonthsAhead] = useState(6);
@@ -19,14 +20,89 @@ export default function ForecastDashboard({ bbox, onClose }) {
   // Training progress simulation
   const [progress, setProgress] = useState(0);
 
-  // Reset states if bbox changes
+  // Animation and Overlay manipulation States
+  const [selectedPredIndex, setSelectedPredIndex] = useState(-1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const playIntervalRef = useRef(null);
+
+  // Reset states if bbox or tab changes
   useEffect(() => {
     setStep(1);
     setHistoryData(null);
     setPredictions(null);
     setTrainingLoss(null);
     setError(null);
+    setSelectedPredIndex(-1);
+    setIsPlaying(false);
   }, [bbox]);
+
+  // Restore base map overlay on unmount
+  useEffect(() => {
+    return () => {
+      if (parsedTiffData && setOverlayUrl) {
+        setOverlayUrl(parsedTiffData.visualOverlayUrl);
+      }
+      if (playIntervalRef.current) {
+        clearInterval(playIntervalRef.current);
+      }
+    };
+  }, [parsedTiffData, setOverlayUrl]);
+
+  // Adjust overlay on prediction step change
+  useEffect(() => {
+    if (!parsedTiffData || !setOverlayUrl) return;
+
+    if (selectedPredIndex === -1) {
+      setOverlayUrl(parsedTiffData.visualOverlayUrl);
+      return;
+    }
+
+    if (!predictions || !predictions[selectedPredIndex]) return;
+
+    // Shift original Float32Array values to match predicted mean
+    const predictedNDVI = predictions[selectedPredIndex].ndvi;
+    const baseMean = parsedTiffData.stats.mean;
+    const diff = predictedNDVI - baseMean;
+
+    const baseArray = parsedTiffData.ndviData;
+    const shiftedArray = new Float32Array(baseArray.length);
+
+    for (let i = 0; i < baseArray.length; i++) {
+      const val = baseArray[i];
+      if (isNaN(val)) {
+        shiftedArray[i] = NaN;
+      } else {
+        shiftedArray[i] = Math.max(-1.0, Math.min(1.0, val + diff));
+      }
+    }
+
+    const newOverlayUrl = renderNDVIArrayToDataURL(shiftedArray, parsedTiffData.width, parsedTiffData.height);
+    setOverlayUrl(newOverlayUrl);
+  }, [selectedPredIndex, predictions, parsedTiffData, setOverlayUrl]);
+
+  // Timer loop for auto-play timeline animation
+  useEffect(() => {
+    if (isPlaying && predictions && predictions.length > 0) {
+      playIntervalRef.current = setInterval(() => {
+        setSelectedPredIndex((prev) => {
+          if (prev >= predictions.length - 1) {
+            return -1;
+          }
+          return prev + 1;
+        });
+      }, 1500);
+    } else {
+      if (playIntervalRef.current) {
+        clearInterval(playIntervalRef.current);
+      }
+    }
+
+    return () => {
+      if (playIntervalRef.current) {
+        clearInterval(playIntervalRef.current);
+      }
+    };
+  }, [isPlaying, predictions]);
 
   // Phase 1: Fetch historical monthly NDVI values
   const handleFetchHistory = async () => {
@@ -456,6 +532,81 @@ export default function ForecastDashboard({ bbox, onClose }) {
               {renderChart()}
             </div>
 
+            {parsedTiffData && predictions && predictions.length > 0 && (
+              <div className="forecast-timeline-controller" style={{
+                background: 'rgba(255, 255, 255, 0.02)',
+                border: '1px solid var(--border-glass)',
+                borderRadius: '8px',
+                padding: '12px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h4 style={{ margin: 0, fontSize: '0.85rem', color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>🗺️</span> Interactive Prediction Map Overlay
+                  </h4>
+                  <button
+                    onClick={() => setIsPlaying(!isPlaying)}
+                    style={{
+                      background: 'rgba(139, 92, 246, 0.15)',
+                      border: '1px solid rgba(139, 92, 246, 0.3)',
+                      color: 'var(--accent-purple-hover)',
+                      borderRadius: '4px',
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                      fontWeight: 'bold',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    {isPlaying ? '⏸️ Pause Animation' : '▶️ Play Timelapse'}
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                  <input
+                    type="range"
+                    min="-1"
+                    max={predictions.length - 1}
+                    value={selectedPredIndex}
+                    onChange={(e) => {
+                      setSelectedPredIndex(parseInt(e.target.value));
+                      setIsPlaying(false);
+                    }}
+                    style={{ flex: 1, accentColor: 'var(--accent-purple)', cursor: 'pointer' }}
+                  />
+                  <span style={{
+                    fontSize: '11px',
+                    fontFamily: 'monospace',
+                    background: 'rgba(0,0,0,0.3)',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    border: '1px solid var(--border-glass)',
+                    minWidth: '150px',
+                    textAlign: 'center'
+                  }}>
+                    {selectedPredIndex === -1 ? (
+                      <span style={{ color: 'var(--accent-green)' }}>Base Map (Acquisition)</span>
+                    ) : (
+                      <span>
+                        <strong style={{ color: 'var(--accent-purple-hover)' }}>Month +{predictions[selectedPredIndex].index}</strong> ({predictions[selectedPredIndex].date.substring(0, 7)})
+                      </span>
+                    )}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#64748b' }}>
+                  <span>Base NDVI (Mean: {parsedTiffData.stats.mean.toFixed(3)})</span>
+                  {selectedPredIndex !== -1 && (
+                    <span>Predicted Mean: <strong style={{ color: 'var(--accent-purple-hover)' }}>{predictions[selectedPredIndex].ndvi.toFixed(3)}</strong> (Shift: {(predictions[selectedPredIndex].ndvi - parsedTiffData.stats.mean).toFixed(3)})</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="forecast-table-container">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <h3 style={{ margin: 0 }}>📋 Predicted Trend Table (LSTM Output)</h3>
@@ -492,13 +643,13 @@ export default function ForecastDashboard({ bbox, onClose }) {
                             <span style={{ 
                               fontSize: '0.8rem', 
                               fontWeight: '600',
-                              color: pred.rice_suitability.includes('Highly') ? '#10b981' : 
-                                     pred.rice_suitability.includes('Moderately') ? '#f59e0b' : 
-                                     pred.rice_suitability.includes('Growing') ? '#3b82f6' : '#94a3b8'
+                              color: pred.rice_suitability?.includes('Highly') ? '#10b981' : 
+                                     pred.rice_suitability?.includes('Moderately') ? '#f59e0b' : 
+                                     pred.rice_suitability?.includes('Growing') ? '#3b82f6' : '#94a3b8'
                             }}>
-                              {pred.rice_suitability}
+                              {pred.rice_suitability || 'N/A'}
                             </span>
-                            <span style={{ fontSize: '0.7rem', color: '#64748b' }}>{pred.rice_detail}</span>
+                            <span style={{ fontSize: '0.7rem', color: '#64748b' }}>{pred.rice_detail || 'No detailed guidance available'}</span>
                           </div>
                         </td>
                       </tr>
