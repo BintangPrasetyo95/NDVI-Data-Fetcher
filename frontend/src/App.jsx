@@ -7,8 +7,12 @@ import ForecastDashboard from './components/ForecastDashboard';
 import LoadingOverlay from './components/LoadingOverlay';
 import { fetchNDVI } from './api/ndvi';
 import { parseNDVITiff } from './utils/ndviParser';
+import { useTheme } from './hooks/useTheme';
 
 export default function App() {
+  // Theme Management
+  const { isDark, toggleTheme } = useTheme();
+
   // Split Screen Sizing & Visibility States
   const [bottomHeight, setBottomHeight] = useState(400); // height in pixels
   const [isMinimized, setIsMinimized] = useState(false);
@@ -220,6 +224,15 @@ export default function App() {
 
   return (
     <div className="app-container">
+      {/* Theme Toggle Button */}
+      <button 
+        className="btn-theme-toggle" 
+        onClick={toggleTheme}
+        title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+      >
+        {isDark ? '☀️' : '🌙'}
+      </button>
+
       {/* 1. Leaflet Interactive map - occupies full background */}
       <MapView
         bbox={bbox}
